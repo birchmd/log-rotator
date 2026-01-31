@@ -14,16 +14,26 @@ pub trait FileHandler {
 
     async fn create_file(&mut self, path: PathBuf) -> anyhow::Result<Self::File>;
 
+    async fn delete_file(&mut self, path: PathBuf) -> std::io::Result<()>;
+
     async fn create_date_stamped_file(
         &mut self,
         dir: &Path,
         prefix: &str,
         date: NaiveDate,
     ) -> anyhow::Result<BufWriter<Self::File>> {
-        let date = date.format("%Y%m%d");
-        let filename = format!("{prefix}-{date}");
-        let file = self.create_file(dir.join(filename)).await?;
+        let path = date_stamped_path(dir, prefix, date);
+        let file = self.create_file(path).await?;
         Ok(BufWriter::new(file))
+    }
+
+    async fn delete_date_stamped_file(
+        &mut self,
+        dir: &Path,
+        prefix: &str,
+        date: NaiveDate,
+    ) -> std::io::Result<()> {
+        self.delete_file(date_stamped_path(dir, prefix, date)).await
     }
 
     async fn close_file(
@@ -48,6 +58,17 @@ impl FileHandler for TokioFileHandler {
         let file = tokio::fs::File::create(path).await?;
         Ok(file)
     }
+
+    async fn delete_file(&mut self, path: PathBuf) -> std::io::Result<()> {
+        tokio::fs::remove_file(path).await?;
+        Ok(())
+    }
+}
+
+fn date_stamped_path(dir: &Path, prefix: &str, date: NaiveDate) -> PathBuf {
+    let date = date.format("%Y%m%d");
+    let filename = format!("{prefix}-{date}");
+    dir.join(filename)
 }
 
 #[cfg(test)]
@@ -76,7 +97,9 @@ pub mod in_mem {
         ) -> std::task::Poll<std::io::Result<usize>> {
             let projection = self.project();
             let mut map = projection.destination.write().unwrap();
-            let inner = map.get_mut(projection.path).unwrap();
+            let Some(inner) = map.get_mut(projection.path) else {
+                return std::task::Poll::Ready(Ok(buf.len()));
+            };
             let pinned = std::pin::pin!(inner);
             pinned.poll_write(cx, buf)
         }
@@ -87,7 +110,9 @@ pub mod in_mem {
         ) -> std::task::Poll<std::io::Result<()>> {
             let projection = self.project();
             let mut map = projection.destination.write().unwrap();
-            let inner = map.get_mut(projection.path).unwrap();
+            let Some(inner) = map.get_mut(projection.path) else {
+                return std::task::Poll::Ready(Ok(()));
+            };
             let pinned = std::pin::pin!(inner);
             pinned.poll_flush(cx)
         }
@@ -146,6 +171,12 @@ pub mod in_mem {
                 path,
             };
             Ok(file)
+        }
+
+        async fn delete_file(&mut self, path: PathBuf) -> std::io::Result<()> {
+            let mut map = self.files.write().unwrap();
+            map.remove(&path);
+            Ok(())
         }
     }
 }

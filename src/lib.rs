@@ -58,6 +58,17 @@ where
             output = new_output;
             flush_queue.push_back(flush_task);
             date = read_date;
+
+            let date_to_delete = config
+                .delete_after
+                .and_then(|n| (0..n).try_fold(date, |acc, _| acc.pred_opt()));
+            if let Some(expired_date) = date_to_delete {
+                // Intentionally ignore errors from deleting old files.
+                handler
+                    .delete_date_stamped_file(&config.dir, &config.prefix, expired_date)
+                    .await
+                    .ok();
+            }
         }
 
         loop {

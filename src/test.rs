@@ -29,6 +29,7 @@ async fn test_log_ration() {
     let config = Config {
         dir: Path::new(".").to_path_buf(),
         prefix: "testing.log".into(),
+        delete_after: None,
     };
 
     let input = Cursor::new(LOGS.as_bytes());
@@ -87,6 +88,7 @@ async fn test_reader_error() {
     let config = Config {
         dir: Path::new(".").to_path_buf(),
         prefix: "testing.log".into(),
+        delete_after: None,
     };
 
     let inner = Cursor::new(LOGS.as_bytes());
@@ -112,6 +114,35 @@ async fn test_reader_error() {
         "Error is reported"
     );
     assert_eq!(lines.next_back(), Some("Line9."), "No data is lost.");
+}
+
+#[tokio::test]
+async fn test_delete_old_files() {
+    let config = Config {
+        dir: Path::new(".").to_path_buf(),
+        prefix: "testing.log".into(),
+        delete_after: Some(5),
+    };
+
+    let input = Cursor::new(LOGS.as_bytes());
+    let clock = FixedClock::new(vec![Duration::from_nanos(1)]);
+    let mut file_handler = InMemFileHandler::default();
+
+    log_redirect_generic(input, &config, clock, &mut file_handler)
+        .await
+        .unwrap();
+
+    let mut files: Vec<(PathBuf, Vec<u8>)> = file_handler.into_inner().into_iter().collect();
+    files.sort_unstable();
+
+    // The first few lines are not in the output because
+    // they were deleted by the rotation logic.
+    let expected_lines = LOGS.lines().skip(4);
+
+    for ((_path, contents), expected_contents) in files.into_iter().zip(expected_lines) {
+        let contents = String::from_utf8(contents).unwrap();
+        assert_eq!(contents, format!("{expected_contents}\n"));
+    }
 }
 
 pin_project_lite::pin_project! {
