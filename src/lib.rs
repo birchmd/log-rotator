@@ -48,9 +48,9 @@ where
         .await?;
     let mut write_buf = Vec::with_capacity(1024);
 
-    let mut reader_output = reader.read_line(&mut read_buf).await?;
+    let mut reader_output = reader.read_line(&mut read_buf).await;
 
-    while let ReaderOutput::Line(read_date) = reader_output {
+    while let Ok(ReaderOutput::Line(read_date)) = reader_output {
         if read_date != date {
             let (new_output, flush_task) = handler
                 .close_file(output, &config.dir, &config.prefix, read_date)
@@ -77,7 +77,13 @@ where
 
         let (write_outcome, read_outcome) = tokio::join!(write_task, read_task);
         write_outcome?;
-        reader_output = read_outcome?;
+        reader_output = read_outcome;
+    }
+
+    if let Err(e) = reader_output {
+        output
+            .write_all(format!("LOGS ROTATION READER ERROR {e:?}").as_bytes())
+            .await?;
     }
 
     // Close out the last file, then wait for all flushes to finish

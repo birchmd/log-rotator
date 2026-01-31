@@ -7,8 +7,10 @@ use {
     std::{
         io::Cursor,
         path::{Path, PathBuf},
+        task::Poll,
         time::Duration,
     },
+    tokio::io::{AsyncRead, BufReader},
 };
 
 const LOGS: &str = r#"Line1.
@@ -77,5 +79,68 @@ async fn test_log_ration() {
         let contents = String::from_utf8(contents).unwrap();
         assert_eq!(path, expected_path);
         assert_eq!(contents, expected_contents);
+    }
+}
+
+#[tokio::test]
+async fn test_reader_error() {
+    let config = Config {
+        dir: Path::new(".").to_path_buf(),
+        prefix: "testing.log".into(),
+    };
+
+    let inner = Cursor::new(LOGS.as_bytes());
+    let inner = ErrorReader { inner };
+    let input = BufReader::new(inner);
+
+    let clock = FixedClock::new(vec![Duration::from_nanos(1); 10]);
+    let mut file_handler = InMemFileHandler::default();
+
+    log_redirect_generic(input, &config, clock, &mut file_handler)
+        .await
+        .unwrap();
+
+    let mut files: Vec<(PathBuf, Vec<u8>)> = file_handler.into_inner().into_iter().collect();
+    files.sort_unstable();
+
+    let contents = str::from_utf8(&files.first().unwrap().1).unwrap();
+    let mut lines = contents.lines();
+
+    assert_eq!(
+        lines.next_back(),
+        Some("LOGS ROTATION READER ERROR Intentional error!"),
+        "Error is reported"
+    );
+    assert_eq!(lines.next_back(), Some("Line9."), "No data is lost.");
+}
+
+pin_project_lite::pin_project! {
+    /// A reader that throws an error
+    /// at EOF
+    struct ErrorReader<R> {
+        #[pin]
+        inner: R,
+    }
+}
+
+impl<R: AsyncRead> AsyncRead for ErrorReader<R> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let inner = self.project().inner;
+        let pre_read = buf.filled().len();
+        match inner.poll_read(cx, buf) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Ready(Ok(())) => {
+                if buf.filled().len() == pre_read {
+                    Poll::Ready(Err(std::io::Error::other("Intentional error!")))
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            }
+        }
     }
 }
