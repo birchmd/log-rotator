@@ -55,7 +55,11 @@ impl FileHandler for TokioFileHandler {
     type File = tokio::fs::File;
 
     async fn create_file(&mut self, path: PathBuf) -> anyhow::Result<Self::File> {
-        let file = tokio::fs::File::create(path).await?;
+        let file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .await?;
         Ok(file)
     }
 
